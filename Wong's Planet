@@ -1,0 +1,176 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import f1_score
+import xgboost as xgb
+
+import os
+import pandas as pd
+
+input_dir = "/kaggle/input/wormhole-stability"
+print("Available files:", os.listdir(input_dir))
+
+train_df = pd.read_csv(f"{input_dir}/train.csv")
+test_df = pd.read_csv(f"{input_dir}/test.csv")
+sample_submission = pd.read_csv(f"{input_dir}/sample_submission.csv")
+
+print(train_df.head())
+
+# Display dataset information
+print(train_df.info())
+print(test_df.info())
+
+# Check missing values
+print(train_df.isnull().sum().sum(), "missing values in train")
+print(test_df.isnull().sum().sum(), "missing values in test")
+
+import pandas as pd
+from sklearn.impute import SimpleImputer
+
+
+train_cleaned = train_df.copy()
+test_cleaned = test_df.copy()
+
+# Identify feature columns (excluding 'ID' and 'Wormhole Stability')
+feature_cols = [col for col in train_cleaned.columns if col not in ["ID", "Wormhole Stability"]]
+
+# Fill missing values with mean
+imputer = SimpleImputer(strategy="mean")
+train_cleaned[feature_cols] = imputer.fit_transform(train_cleaned[feature_cols])
+test_cleaned[feature_cols] = imputer.transform(test_cleaned[feature_cols])
+
+print("Missing values handled successfully")
+
+# Convert target variable to numeric
+label_encoder = LabelEncoder()
+train_cleaned["Wormhole Stability"] = label_encoder.fit_transform(train_cleaned["Wormhole Stability"])
+
+print("Target variable encoded")
+
+X = train_cleaned[feature_cols]
+y = train_cleaned["Wormhole Stability"]
+from imblearn.over_sampling import SMOTE
+
+# Apply SMOTE to balance the dataset
+smote = SMOTE(random_state=42)
+X_resampled, y_resampled = smote.fit_resample(X, y)
+
+print("Data balanced successfully")
+
+# Standardize features
+scaler = StandardScaler()
+X_resampled = scaler.fit_transform(X_resampled)
+test_cleaned[feature_cols] = scaler.transform(test_cleaned[feature_cols])
+
+print("Feature scaling done")
+X_train, X_val, y_train, y_val = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+
+log_reg = LogisticRegression()
+rf= RandomForestClassifier(n_estimators=100, max_depth=10,
+                                  min_samples_split=5, min_samples_leaf=2,
+                                  random_state=42)
+xgb_model = xgb.XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss")
+
+log_reg.fit(X_train, y_train)
+rf.fit(X_train, y_train)
+xgb_model.fit(X_train, y_train)
+
+log_reg_pred = log_reg.predict(X_val)
+rf_pred = rf.predict(X_val)
+xgb_pred = xgb_model.predict(X_val)
+
+# Compute F1 Scores
+log_reg_f1 = f1_score(y_val, log_reg_pred)
+rf_f1 = f1_score(y_val, rf_pred)
+xgb_f1 = f1_score(y_val, xgb_pred)
+
+# Print F1 Scores
+print(f"F1 Score - Logistic Regression: {log_reg_f1}")
+print(f"F1 Score - Random Forest: {rf_f1}")
+
+from sklearn.metrics import accuracy_score
+
+train_preds = xgb_model.predict(X_train)
+
+# Calculate training accuracy
+train_accuracy = accuracy_score(y_train, train_preds)
+
+print(f"XGBoost Training Accuracy: {train_accuracy:.4f}")
+
+from sklearn.metrics import accuracy_score
+
+val_preds = xgb_model.predict(X_val)
+val_accuracy = accuracy_score(y_val, val_preds)
+
+print(f"XGBoost Validation Accuracy: {val_accuracy:.4f}")
+
+from catboost import CatBoostClassifier
+from sklearn.metrics import f1_score
+
+cat_model = CatBoostClassifier(iterations=1000, learning_rate=0.05, depth=6,
+                               l2_leaf_reg=10, random_seed=42, verbose=200)
+
+cat_model.fit(X_train, y_train, eval_set=(X_val, y_val), early_stopping_rounds=50, verbose=200)
+
+val_preds_cat = cat_model.predict(X_val)
+cat_f1 = f1_score(y_val, val_preds_cat, average="binary")
+
+print(f"CatBoost Validation F1 Score: {cat_f1:.4f}")
+
+import os
+from catboost import CatBoostClassifier
+import pandas as pd
+
+input_dir = "/kaggle/input/wormhole-stability"
+
+train_df = pd.read_csv(f"{input_dir}/train.csv")
+test_df = pd.read_csv(f"{input_dir}/test.csv")
+
+train_df["Wormhole Stability"] = train_df["Wormhole Stability"].map({"Success": 1, "Fail": 0})
+
+X_train = train_df.drop(columns=["ID", "Wormhole Stability"])
+y_train = train_df["Wormhole Stability"]
+
+cat_model = CatBoostClassifier(
+    iterations=1500,
+    learning_rate=0.04, 
+    depth=7,
+    l2_leaf_reg=6,
+    random_seed=42,
+    loss_function='Logloss',
+    eval_metric='F1',
+    auto_class_weights="SqrtBalanced",
+    verbose=False
+)
+
+cat_model.fit(X_train, y_train, early_stopping_rounds=50, verbose=False)
+
+# Ensure test features match train features
+test_features = test_df.drop(columns=["ID"], errors='ignore')
+test_features = test_features[X_train.columns] 
+
+# Predict probabilities instead of direct class labels
+probs = cat_model.predict_proba(test_features)[:, 1]
+
+# Adjust threshold for better balance 
+threshold = 0.35 
+test_predictions = ["Success" if p > threshold else "Fail" for p in probs]
+
+submission = pd.DataFrame({
+    "ID": test_df["ID"],
+    "Wormhole Stability": test_predictions
+})
+
+submission.to_csv("submission3.csv", index=False)
+print("Submission file 'submission3.csv' created successfully")
+
+print(submission["Wormhole Stability"].value_counts(normalize=True))
